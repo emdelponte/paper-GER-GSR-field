@@ -1,0 +1,1126 @@
+---
+title: "GER-GSR"
+author: "Franklin"
+date: "6/25/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Loading packages 
+
+```{r message=FALSE, warning=FALSE, paged.print=FALSE}
+library(tidyverse)
+library(here)
+library(readxl)
+library(viridis)
+library(ggthemes)
+library(lme4)
+library(cowplot)
+library(broom)
+library(agricolae)
+library(lattice)
+library(influence.ME)
+library(emmeans)
+library(scales)
+```
+
+
+## Gibberella Stalk Rot trials - GSR
+
+### Reading data
+
+```{r}
+dat_stalk_2017 <- read_excel(here("stalk-data", "data", "data_stalk.xlsx"), 1) %>% 
+  subset(year == "2017") %>% 
+  mutate(isolate = as.factor(isolate)) %>% 
+  group_by(year, hybrid, host, species, isolate,  block) %>%
+  summarise(sev_plant = mean(sev, rm.na = T)) %>% 
+  select(year, hybrid, host, species, isolate, stalk_half = block, sev_plant) 
+
+
+
+dat_stalk_2018 <- read_excel(here("stalk-data", "data", "data_stalk.xlsx"), 1) %>% 
+  subset(year == "2018") %>% 
+  mutate(isolate = as.factor(isolate)) %>% 
+  group_by(year, hybrid, host, species, isolate,  stalk_half) %>%
+  summarise(sev_plant = mean(sev, rm.na = T)) 
+
+
+
+
+dat_stalk <- bind_rows(dat_stalk_2017, dat_stalk_2018) %>% 
+  filter(isolate != "test" &
+           sev_plant != "NA")%>% 
+  ungroup() %>% 
+  mutate(isolate = dplyr::recode(isolate, 
+  "1" = "188",
+  "2" = "189",
+  "3" = "190",
+  "5" = "191",
+  "6" = "192",
+  "7" = "193",
+  "9" = "194",
+  "11" = "195",
+  "12" = "196",
+  "14" = "197",
+  "16" = "1",
+  "17" = "2",
+  "18" = "3",
+  "19" = "4",
+  "22" = "5",
+  "26" = "198",
+  "27" = "6",
+  "28" = "7",
+  "29" = "199",
+  "30" = "8",
+  "31" = "9",
+  "33" = "10",
+  "35" = "11",
+  "36" = "12",
+  "37" = "13",
+  "39" = "14",
+  "40" = "15",
+  "43" = "16",
+  "44" = "17",
+  "45" = "18",
+  "47" = "200",
+  "48" = "201",
+  "49" = "202",
+  "50" = "203",
+  "51" = "204",
+  "55" = "205",
+  "56" = "206",
+  "58" = "207",
+  "59" = "208",
+  "60" = "209",
+  "21" = "21")) %>% 
+  mutate(host1 = paste(species, host, sep = "_")) 
+
+```
+
+## Plots
+### Stalk by hybrid
+
+Plotting GSR severity by species and hybrids. 
+
+
+```{r}
+dat_stalk %>% 
+  filter(species != "test") %>% 
+  group_by(isolate, species, host, year,hybrid) %>% 
+  summarise(sev_plant = mean(sev_plant)) %>% 
+  ggplot(aes(species, sev_plant))+
+  geom_boxplot(aes(fill = host), size = 0.6, 
+               outlier.colour = NA, width=0.35, 
+               position = position_dodge(width = 0.5)) + 
+  scale_fill_grey(name = "", start = 1, end = 1)+
+  geom_jitter(position=position_jitterdodge(dodge.width=0.7), alpha=0.6, aes(colour=host))+
+  #coord_flip()+
+  facet_grid(~year*hybrid) +
+  #scale_colour_discrete(breaks=c("corn", "wheat"),
+  #  labels = c("milho", "trigo"))+
+  theme_minimal()+ 
+  #ylim(0,80)+
+  theme(legend.position = "top",
+        panel.grid.major.x = element_blank(), 
+        plot.margin = unit(c(-0.6, 0.1, -0.2, 0.1), "cm"),
+        legend.margin=margin(0,0,0,0),
+        legend.box.margin=margin(-0,-10,-10,-10))+
+ labs(y = "GSR severity (%)" ,
+      x = "", title = "",
+      color = "")+
+  ggsave("figs/fig2_stalk.png", width=6, height=2.8, dpi=300)
+
+
+```
+```{r}
+dat_stalk %>% 
+  filter(species != "test") %>% 
+  summary(.$sev_plant)
+```
+
+
+## Mixed model estimates
+
+   We will use the `lmer` function of the `lme4` to fit the mixed models. We log-transformed `sev`data (log[sev+1]) so variance could be reduced.
+
+Let’s fit a mixed model for the GER data.
+
+```{r, message=FALSE, warning=FALSE}
+mix1 <- lmer (log(sev_plant+1) ~ species * host + (1|hybrid/host/isolate), data=dat_stalk, REML=FALSE)
+
+plot(mix1, type = c("p", "smooth"), col = "black")
+qqmath(mix1, id = 0.05, col = "black")
+
+```
+
+
+```{r}
+library(car)
+Anova(mix1)
+
+
+```
+There is no significant interaction. Thus, we just test the effect of species. 
+
+```{r}
+
+mix2 <- lmer (log(sev_plant+1) ~ species + (1|hybrid/host/isolate), data=dat_stalk, REML=FALSE)
+
+plot(mix2, type = c("p", "smooth"), col = "black")
+qqmath(mix2, id = 0.05, col = "black")
+
+```
+
+```{r}
+Anova(mix2)
+
+medias_species <- emmeans(mix2, pairwise ~ species, type = "response")
+medias_species
+
+```
+
+### LSmeans
+
+```{r}
+gsr_ic <- emmeans(mix2,  ~ species, type = "response") %>% as.data.frame() %>%
+  ggplot(aes(species, response, colour = species))+
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = lower.CL, ymax= upper.CL, width = 0))+
+  #facet_grid(~host)+
+  theme_minimal()+
+  ylim(0,70)+ 
+  theme(legend.position="none",
+        panel.grid.major.x = element_blank() 
+        #axis.text.x = element_text(angle = 45, hjust = 1),
+        #legend.text = element_text(face = "italic", size = 6),
+        #strip.text = element_text(face = "italic"),
+        #plot.margin = margin(0, 0.1, 0.1, 0.1, unit = "cm")
+       )+
+ labs(y = "GSR severity (%)", x ="" )#+
+  #ggsave("figs/ic-emmeans_GSR.png", width=2.3, height=3)
+
+gsr_se  <- emmeans(mix2,  ~ species, type = "response") %>% as.data.frame() %>%
+  ggplot(aes(species, response, colour = species))+
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = response-SE, ymax= response+SE, width = 0))+
+  #facet_grid(~host)+
+  theme_minimal()+
+  ylim(-1,30)+ 
+  theme(legend.position="none",
+        panel.grid.major.x = element_blank(), 
+        #axis.text.x = element_text(angle = 45, hjust = 1),
+        #legend.text = element_text(face = "italic", size = 6),
+        #strip.text = element_text(face = "italic"),
+        plot.margin = margin(0.85, 0.1, 0.17, 0.1, unit = "cm")
+       )+
+ labs(y = "GSR severity (%)", x ="" )#+
+  #ggsave("figs/SE-emmeans_GSR.png", width=2.3, height=3)
+  
+```
+
+
+## Gibberella Ear Rot trials - GER
+
+### Reading data
+
+```{r}
+dat_2017 <- read_excel(here("ear-data", "data_ear.xlsx"), 1) %>% 
+  mutate(year = "2017") %>% 
+  gather(hybrid, sev, 6:7) %>% 
+  filter(sev != "NA") %>% 
+  mutate(sev = as.numeric(sev)) %>% 
+  group_by(year, hybrid, block, species, host, isolate) %>% 
+  summarise(sev = mean(sev, na.rm = TRUE)) %>% 
+  select(year, hybrid, species, host, isolate, ear = block, sev) 
+  
+  
+  
+dat_2018 <- read_excel(here("ear-data", "data_ear.xlsx"), 2) %>% 
+  mutate(year = "2018") %>% 
+  gather(hybrid, sev, 3:4) %>% 
+  filter(sev != "NA") %>% 
+  select(year, hybrid, species, host, isolate, ear, sev) 
+  #group_by(year, hybrid, species, host, isolate) %>% 
+  #summarise(sev = mean(sev, na.rm = TRUE)) %>% 
+  #select(year, hybrid, species, host, isolate, sev) %>% 
+  #ungroup()
+ 
+
+
+dat_ear <- bind_rows(dat_2017, dat_2018) %>% 
+  filter(isolate != "test" & sev != 0 ## remove the ears with zero severity 
+         )  %>% 
+  mutate(isolate = dplyr::recode(isolate, 
+  "1" = "188",
+  "2" = "189",
+  "3" = "190",
+  "5" = "191",
+  "6" = "192",
+  "7" = "193",
+  "9" = "194",
+  "11" = "195",
+  "12" = "196",
+  "14" = "197",
+  "16" = "1",
+  "17" = "2",
+  "18" = "3",
+  "19" = "4",
+  "22" = "5",
+  "26" = "198",
+  "27" = "6",
+  "28" = "7",
+  "29" = "199",
+  "30" = "8",
+  "31" = "9",
+  "33" = "10",
+  "35" = "11",
+  "36" = "12",
+  "37" = "13",
+  "39" = "14",
+  "40" = "15",
+  "43" = "16",
+  "44" = "17",
+  "45" = "18",
+  "47" = "200",
+  "48" = "201",
+  "49" = "202",
+  "50" = "203",
+  "51" = "204",
+  "55" = "205",
+  "56" = "206",
+  "58" = "207",
+  "59" = "208",
+  "60" = "209",
+  "21" = "21")) %>% 
+  ungroup() %>% 
+  mutate(ear = as.factor(ear),
+         isolate = as.factor(isolate)) %>% 
+  mutate(host1 = paste(species, host, sep = "_"))
+
+summary(dat_ear$sev)
+
+
+```
+
+## Plots
+
+
+```{r}
+dat_ear %>% 
+  #filter(hybrid == "supremo") %>% 
+  #group_by(isolate, specie, host, block) %>% summarise(mean_sev = mean(sev_plant)) %>% 
+  ggplot(aes(hybrid, sev))+
+  geom_boxplot(size = 0.2, outlier.shape = NA) + 
+  geom_jitter(width=0.1, size=1.5,  alpha=0.3, aes(color=species))+
+  #coord_flip()+
+  facet_wrap(~isolate) +
+  #scale_colour_discrete(breaks=c("corn", "wheat"),
+  #  labels = c("milho", "trigo"))+
+  theme_minimal()+ 
+  #ylim(0,80)+
+  theme(legend.position = "top",axis.text.x = element_text(angle = 45, hjust = 1)
+        #,plot.title = element_text(face="bold")
+        )+
+ labs(y = "Severity (%)" ,
+      x = "", title = "",
+      color = "")
+```
+
+### Ear - by species
+
+```{r}
+dat_ear %>% 
+  filter(species != "test") %>% 
+  group_by(isolate, species, host, year,hybrid) %>% 
+  summarise(sev = mean(sev)) %>% 
+  ggplot(aes(species, sev))+
+  geom_boxplot(aes(fill = host), size = 0.6, 
+               outlier.colour = NA, width=0.35, 
+               position = position_dodge(width = 0.5)) + 
+  scale_fill_grey(name = "", start = 1, end = 1)+
+  geom_jitter(position=position_jitterdodge(dodge.width=0.7),  alpha=0.6, aes(color=host))+
+  #coord_flip()+
+  facet_wrap(~year*hybrid,  ncol = 4) +
+  #scale_colour_discrete(breaks=c("corn", "wheat"),
+  #  labels = c("milho", "trigo"))+
+  theme_minimal()+ 
+  #ylim(0,80)+
+  theme(legend.position = "top",
+        panel.grid.major.x = element_blank(), 
+        plot.margin = unit(c(-0.6, 0.1, -0.2, 0.1), "cm"),
+        legend.margin=margin(0,0,0,0),
+        legend.box.margin=margin(-0,-10,-10,-10))+
+ labs(y = "GER severity (%)" ,
+      x = "", title = "",
+      color = "")+
+  ggsave("figs/fig3_ear_sem_zeros.png", width=6, height=2.8, dpi=300)
+
+
+
+
+```
+
+```{r}
+dat_ear %>% 
+  filter(species != "test") %>% 
+  summary(.)
+```
+
+## Mixed model estimates
+
+  We will use the `lmer` function of the `lme4` to fit the mixed models. We log-transformed `sev`data (log[sev+1]) so variance could be reduced.
+
+Let’s fit a mixed model for the GER data. 
+
+```{r, message=FALSE, warning=FALSE}
+mix0 <- lmer (log(sev+1) ~ species * host + (1|hybrid/host/isolate), data=dat_ear, REML=FALSE)
+mix1 <- lmer (log(sev+1) ~ species * host + (1|hybrid/isolate), data=dat_ear, REML=FALSE)
+
+anova(mix0, mix1) ## Going to use mix1 model. Keeping host random effect give me problems of convergence once its fixed effect is already explaining everything. 
+
+
+plot(mix1, type = c("p", "smooth"), col = "black")
+qqmath(mix1, id = 0.05, col = "black")
+
+```
+
+
+Once we have our best fit model, let's first test the effect of the interaction.
+
+```{r}
+library(car)
+Anova(mix1)
+
+
+```
+There is significant interaction. THus, we create different data sets for each hybrid in order to test the effect of species within each host of origin. 
+
+
+
+
+
+```{r}
+
+medias_species <- emmeans(mix1,  ~ species*host, type = "response" )
+summary(medias_species, by = "species")
+summary(medias_species, by = "host")
+
+
+```
+```{r}
+# checking significant interaction within each factor.
+pairs(medias_species, by = "species", type = "response" )
+
+pairs(medias_species, by = "host", type = "response" )
+
+
+```
+
+
+## LSmeans
+
+```{r}
+ger_ic <- medias_species %>% as.data.frame() %>%
+  ggplot(aes(species, response, colour = species))+
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = lower.CL, ymax= upper.CL, width = 0))+
+  facet_grid(~host)+
+  theme_minimal()+
+  ylim(-1,90)+ 
+  theme(legend.position="none",
+        panel.grid.major.x = element_blank() 
+        #axis.text.x = element_text(angle = 45, hjust = 1),
+        #legend.text = element_text(face = "italic", size = 6),
+        #strip.text = element_text(face = "italic"),
+        #plot.margin = margin(0, 0.1, 0.1, 0.1, unit = "cm")
+       )+
+ labs(y = "GER severity (%)", x ="" )#+
+  #ggsave("figs/ic-emmeans_GER_semzeros.png", width=3, height=3)
+
+ger_se <- medias_species %>% as.data.frame() %>%
+  ggplot(aes(species, response, colour = species))+
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = response-SE, ymax= response+SE, width = 0))+
+  facet_grid(~host)+
+  theme_minimal()+
+  ylim(-1,30)+ 
+  theme(legend.position="none",
+        panel.grid.major.x = element_blank() 
+        #axis.text.x = element_text(angle = 45, hjust = 1),
+        #legend.text = element_text(face = "italic", size = 6),
+        #strip.text = element_text(face = "italic"),
+       #plot.margin = margin(0, 0, 0, 0, unit = "cm")
+       )+
+ labs(y = "GER severity (%)", x ="" )#+
+  #ggsave("figs/SE-emmeans_GER_semzeros.png", width=3, height=3)
+  
+```
+
+
+## Combo plot
+
+
+```{r}
+plot_grid(ger_se, gsr_se, labels=c('A', 'B'), align = "hv", ncol=2)+
+ggsave("figs/fig4_combo_SE_semzeors.png",  width=5.8, height=3, dpi=300)
+
+plot_grid(ger_ic, gsr_ic, labels=c('A', 'B'), align = "hv", ncol=2)+
+ggsave("figs/fig4_combo_ic_semzeors.png",  width=5.8, height=3, dpi=300)
+
+```
+
+
+
+#Correlation 
+```{r}
+
+ear <- dat_ear %>% 
+  filter(species != "test") %>% 
+  group_by(isolate, species, host, hybrid) %>% 
+  summarise(sev_ear = mean(sev))
+
+
+stalk <- dat_stalk %>% 
+  filter(species != "test") %>% 
+  group_by(isolate, species, host, hybrid) %>% 
+  summarise(sev_stalk = mean(sev_plant)) 
+
+
+
+stalk_ear <- left_join(stalk, ear)
+
+
+
+
+M <- cor.test(stalk_ear$sev_stalk, stalk_ear$sev_ear, use = "pairwise.complete.obs", method = "pearson")
+
+M 
+
+
+stalk_ear %>% 
+  #filter(hybrid == "supremo") %>% 
+  ggplot(aes(sev_ear, sev_stalk))+
+  geom_point( size = 3, alpha=0.7
+              , aes(color = species)
+              )+
+  geom_smooth(method="lm", fullrange = TRUE, se = F, size = 0.7, color = "black")+
+  #geom_text(x = 25, y = 90, label = lm_eqn(stalk_ear), parse = TRUE, size = 2)+
+  facet_grid (~ hybrid, scales = "free") +
+  #scale_fill_grey(start = 0.8, end = 0.5)+
+  theme_minimal()+ 
+  ylim(0,100)+xlim(0,100)+
+  theme(legend.position = "top"
+        #,plot.title = element_text(face="bold")
+        )+
+  labs(x = "Severidade em colmos (%)",
+      y = "Severidade em colmos (%)", 
+      #title = "SUPREMO",
+      color = "")+  
+  ggsave("stalk_ear_correlation.png", width=4, height=3.5)
+
+
+lm_eqn <- function(stalk_ear){
+    fit <- lm(sev_stalk ~ sev_ear, stalk_ear);
+    eq <- substitute(italic(y) == a + b %.% italic(x)*","~~italic(r)^2~"="~r2*","~~italic(P)~"<"~ p, 
+         list(a = format(coef(fit)[1], digits = 2), 
+              b = format(coef(fit)[2], digits = 2), 
+             r2 = format(summary(fit)$r.squared, digits = 3),
+             p = "0.001"))
+    as.character(as.expression(eq));                 
+}
+
+summary(fit)
+
+```
+
+# Mycotoxin 
+
+
+```{r}
+
+dat_maize1 <- read_excel(here("ear-data", "FY19_Vaillancourt_Complete_Results_11_26_19.xlsx"), 3) %>%
+  select(-"Lab_ID#") %>% 
+  mutate(exp = "1")
+
+dat_maize2 <- read_excel(here("ear-data", "FY19_Vaillancourt_Complete_Results_11_26_19.xlsx"), 4) %>%
+  select(-"Lab_ID#") %>% 
+  mutate(exp = "2")
+
+dat_mycot_maize <- dat_maize2 %>% 
+  #bind_rows(., dat_maize2) %>%
+  filter(strain != "test" &
+           strain != "NA" ) %>% 
+  arrange(strain) %>% 
+  gather(mycotoxin, ppm, 5:9) #%>% 
+  #filter(mycotoxin != "ZON")
+
+#openxlsx::write.xlsx(dat_mycot_wheat, "dat_mycot_wheat.xlsx", colNames = TRUE)
+
+
+
+
+```
+
+
+```{r}
+myColors1 <- c("#00AFBB","blue",  "#E7B800", "#FC4E07", "#2CA25F")
+names(myColors1) <- levels(factor(dat_mycot_maize$mycotoxin, levels=c("15ADON", "3ADON", "DON", "NIV", "ZON")))
+colScale1 <- scale_fill_manual(name = "", values = myColors1)
+
+fgra_maize <-dat_mycot_maize %>% 
+  filter(species == "Fgra" ) %>% 
+  group_by(mycotoxin, host, species, strain) %>% 
+  summarize(ppm = mean(ppm, na.rm = T)) %>% 
+  ggplot()+
+  geom_bar(aes(y=ppm, x=factor(strain),  fill = mycotoxin), stat = "identity", alpha =0.8, width = 0.6)+
+ theme_minimal()+
+ facet_wrap (species ~ host, scales = "free_x") +
+ colScale1+
+  #scale_fill_manual(labels = c("15ADON", "3ADON", "DON", "NIV", "ZON"), values=c("#00AFBB","blue",  "#E7B800", "#FC4E07", "#2CA25F"))+ #"#00AFBB", "#E7B800", "#FC4E07"
+  theme(legend.position = "none",
+        legend.margin=margin(0,0,0,0),
+        legend.box.margin=margin(-0,-10,-10,-10),
+        plot.margin = unit(c(0.1, 0.1, -0.2, 0.1), "cm"),
+        axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+        panel.grid.major.x = element_blank() 
+        )+
+ scale_y_continuous(expand=c(0,0))+
+ labs(y =  (expression(paste('Trichothecenes', ' (', mu,'g/g)'))), fill ="", x = "")#+
+  #ggsave("figs/tric_rice.png", width=4.2, height=2.8, dpi=300)
+
+
+fmer_maize <- dat_mycot_maize %>% 
+  filter(species == "Fmer" ) %>% 
+  group_by(mycotoxin, host, species, strain) %>% 
+  summarize(ppm = mean(ppm, na.rm = T)) %>% 
+  ungroup() %>% 
+  ggplot()+
+  geom_bar(aes(y=ppm, x=factor(strain),  fill = mycotoxin), stat = "identity", alpha =0.8, width = 0.6)+
+ theme_minimal()+
+ facet_wrap (species ~ host, scales = "free_x") +
+ colScale1+
+  theme(legend.position = "none",
+        legend.margin=margin(0,0,0,0),
+        legend.box.margin=margin(-0,-10,-10,-10),
+        plot.margin = unit(c(0.1, 0.1, -0.2, 0.1), "cm"),
+        axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+        panel.grid.major.x = element_blank() 
+        )+
+ scale_y_continuous(expand=c(0,0))+
+ labs(y =  "", fill ="", x = "")#+
+  #ggsave("figs/tric_rice.png", width=4.2, height=2.8, dpi=300)
+
+```
+
+## Plots grids
+
+```{r}
+legend_maize <- get_legend(dat_mycot_maize %>% ggplot()+
+  geom_bar(aes(y=ppm, x=reorder(strain,ppm),  fill = mycotoxin), stat = "identity", alpha =0.8, width = 0.6)+
+ #theme_minimal()+
+ colScale1 + theme(legend.position="top")+guides(color = guide_legend(nrow = 1)))
+
+grid1 <- plot_grid(fgra_maize, fmer_maize, labels=c('A', ''), align = "hv", ncol=2)
+grid3<-plot_grid(legend_maize, grid1, align = "hv", ncol = 1, rel_heights = c(.1, 1))+
+ggsave("figs/fig6_mycot_maize2.png",  width=10.5, height=3.3, dpi=300)
+grid3
+```
+
+
+
+### Descritive analysis
+
+```{r}
+datx <- dat_mycot_maize %>% 
+  filter(species == "Fmer" ) %>% 
+  group_by(mycotoxin, host, species, strain) %>% 
+  summarise(ppm = mean(ppm, na.rm = T)) %>% 
+  filter(ppm != "NaN")
+summary(datx)
+table(datx$host, datx$species, datx$mycotoxin)
+
+#dat1 <- dat_rice %>% 
+ # filter(species != "Fgra_test") %>% 
+  #filter(mycotoxin == "ZON")
+  
+  
+#cohen.d(dat1$ppm ~ dat1$species, na.rm=TRUE)
+
+dat_mycot_maize %>% 
+  #filter(host == "maize") %>% 
+  group_by(mycotoxin, host, species) %>% 
+  summarise(mean = round(mean(ppm, na.rm =TRUE), 2), 
+            n = length(ppm),
+            se = round(sd(ppm, na.rm =TRUE)/sqrt(n), 2),
+            sd = round(sd(ppm, na.rm =TRUE),2))%>% 
+  filter(mean != "NaN") %>% 
+  as.data.frame()
+```
+
+
+
+
+## sev x micotoxina 
+
+```{r, warning=FALSE}
+
+fmer_820 <- dat_ear %>% 
+  filter(hybrid == "BM820") %>% 
+  filter(species == "Fmer" ) %>% 
+  group_by(hybrid,  species, host,  isolate) %>% 
+  summarise(mean_sev = mean(sev, na.rm = T),
+            sd_sev = sd(sev, na.rm=TRUE),
+           n = length(sev),
+           se_sev = sd_sev / sqrt(n)) %>% 
+  ggplot(aes(isolate, mean_sev))+
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = mean_sev-se_sev, ymax= mean_sev+se_sev, width = 0))+
+  theme_minimal()+
+  facet_wrap (species ~ host, scales = "free_x") +
+ theme(legend.position = "none",
+        legend.margin=margin(0,0,0,0),
+        legend.box.margin=margin(-0,-10,-10,-10),
+        plot.margin = unit(c(0.1, 0.1, -0.2, 0.1), "cm"),
+        axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+        panel.grid.major.x = element_blank() 
+        )+
+ ylim(c(0,100))+
+ #scale_y_continuous(expand=c(0,0))+
+ labs(y = "", x ="" )
+
+
+fgra_820 <- dat_ear %>% 
+  filter(hybrid == "BM820") %>% 
+  filter(species == "Fgra" ) %>% 
+  group_by(hybrid,  species, host,  isolate) %>% 
+  summarise(mean_sev = mean(sev, na.rm = T),
+            sd_sev = sd(sev, na.rm=TRUE),
+           n = length(sev),
+           se_sev = sd_sev / sqrt(n)) %>% 
+  ggplot(aes(isolate, mean_sev))+
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = mean_sev-se_sev, ymax= mean_sev+se_sev, width = 0))+
+  theme_minimal()+
+  facet_wrap (species ~ host, scales = "free_x") +
+ theme(legend.position = "none",
+        legend.margin=margin(0,0,0,0),
+        legend.box.margin=margin(-0,-10,-10,-10),
+        plot.margin = unit(c(0.1, 0.1, -0.2, 0.1), "cm"),
+        axis.text.x = element_text(angle = 90, hjust = 0, vjust = 0.5),
+        panel.grid.major.x = element_blank() 
+        )+
+  ylim(c(0,100))+
+ #scale_y_continuous(expand=c(0,0))+
+ labs(y = "GER severity (%)", x ="" )
+
+```
+
+## grid
+```{r}
+
+grid2 <- cowplot::plot_grid(fgra_820, fmer_820, labels=c('B', ''), align = "hv", ncol=2)
+
+cowplot::plot_grid(grid3, grid2, labels=c('', ''), align = "hv", ncol=1)+
+ggsave("figs/fig_combo1.png",  width=7.7, height=4.3, dpi=300)
+
+```
+### Corr NIV
+```{r}
+
+fmer_820 <- dat_ear %>% 
+  filter(hybrid == "BM820") %>% 
+  filter(species == "Fmer" ) %>% 
+  group_by(hybrid,  species, host,  isolate) %>% 
+  summarise(mean_sev = mean(sev, na.rm = T))
+  
+  
+fmer_maize <- dat_mycot_maize %>% 
+  filter(species == "Fmer" &
+         strain != "NA") %>% 
+  group_by(mycotoxin, host, species, isolate=strain) %>% 
+  summarize(ppm = mean(ppm, na.rm = T)) %>% 
+  filter(mycotoxin == "NIV" ) 
+  
+  
+
+corr <- left_join(fmer_820, fmer_maize) 
+  #filter() %>% 
+  #select(-c(isolate, species, host, hybrid, mycotoxin)) 
+
+
+
+niv_cor<- cor.test(corr$mean_sev, corr$ppm, use = "pairwise.complete.obs", method = "pearson")
+niv_cor 
+```
+
+
+### Corr NIV
+```{r}
+
+fgra_820 <- dat_ear %>% 
+  filter(hybrid == "BM820") %>% 
+  filter(species == "Fgra" ) %>% 
+  group_by(hybrid,  species, host,  isolate) %>% 
+  summarise(mean_sev = mean(sev, na.rm = T))
+  
+  
+fgra_maize <- dat_mycot_maize %>% 
+  filter(species == "Fgra" &
+         strain != "NA") %>% 
+  group_by(mycotoxin, host, species, isolate=strain) %>% 
+  summarize(ppm = mean(ppm, na.rm = T)) %>% 
+  filter(mycotoxin == "DON" ) 
+  
+  
+
+corr <- left_join(fgra_820, fgra_maize) 
+  #filter() %>% 
+  #select(-c(isolate, species, host, hybrid, mycotoxin)) 
+
+
+
+don_cor<- cor.test(corr$mean_sev, corr$ppm, use = "pairwise.complete.obs", method = "pearson")
+don_cor 
+```
+
+## Multivariate
+
+### Preparing datasets
+
+```{r warning=FALSE, include=FALSE}
+stalk_multivar <- dat_stalk %>%
+  mutate(var = "stalk") %>% 
+  unite(hyb, var, hybrid, sep = "_") %>% 
+  group_by(hyb, host, species, strain = isolate) %>%
+  summarize(sev_stalk = mean(sev_plant, na.rm = TRUE)) %>% 
+  spread(hyb, sev_stalk) 
+
+ear_multivar <- dat_ear %>%
+  mutate(var = "ear") %>% 
+  unite(hyb, var, hybrid, sep = "_") %>% 
+  group_by(hyb, host, species, strain = isolate) %>%
+  summarize(sev_ear = mean(sev, na.rm = TRUE)) %>% 
+  spread(hyb, sev_ear)
+
+corn_aggress <- ear_multivar %>% 
+  left_join(., stalk_multivar) %>% 
+  #filter(strain != "Fm14" &
+   #      strain != "Fm15" &
+    #     strain != "Fm16" &
+     #    strain != "Fm21"&
+      #   strain != "Fg190" &
+       #  strain != "Fg196" &
+        # strain != "Fg196") %>% 
+  arrange(strain)
+
+
+dat_multivar <- read_excel( "dat_multivar.xlsx", 1) %>% 
+  left_join(., stalk_multivar) %>% 
+  left_join(., ear_multivar)
+
+
+
+table(corn_aggress$species, corn_aggress$host)
+#openxlsx::write.xlsx(corn_aggress, "aggress_corn.xlsx", colNames = TRUE)
+```
+
+# FACTOR mine package
+
+```{r}
+#http://www.sthda.com/english/articles/31-principal-component-methods-in-r-practical-guide/112-pca-principal-component-analysis-essentials/
+library("FactoMineR")
+mult1 <- corn_aggress
+
+mult <- corn_aggress %>% 
+  select(-c(species, host)) 
+  
+
+rownames(mult) <- mult$strain ## set rownames
+mult <- mult %>% select(-strain)  ## remove first column
+
+
+
+res.pca <- PCA(mult, graph = FALSE)
+
+print(res.pca)
+
+
+```
+
+```{r}
+library("factoextra")
+eig.val <- get_eigenvalue(res.pca)
+eig.val
+
+fviz_eig(res.pca, addlabels = TRUE, ylim = c(0, 50))
+```
+
+## PCA plot
+
+```{r}
+fviz_pca_biplot(res.pca, 
+                # Individuals
+                geom.ind = "point",
+                #geom.var = c("point", "text"),
+                fill.ind = mult1$species, #col.ind = "black",
+                pointshape = 21, 
+                pointsize = "contrib",
+                mean.point = FALSE, #remove group mean point
+                #palette = "jco",
+                palette = c("#00AFBB", "#E7B800", "#FC4E07"),
+                addEllipses = TRUE, #ellipse.type = "confidence",
+                # Variables
+                alpha.var ="contrib", 
+                col.var = "contrib",
+                gradient.cols = "RdYlBu",
+                invisible = "var",
+                legend.title = list(fill = "Species", color = "Contrib",
+                                    alpha = "Contrib", size = "Contrib")
+                )+
+  labs(title = "")+ 
+  xlim(c(-5.2, 5.23))+
+  ylim(c(-5.2, 5.2))+ #scale_fill_brewer(palette="Dark2") +
+  ggsave("figs/fig6_biplot.png", width=6, height=4.8, dpi=300)
+  
+
+fviz_pca_biplot(res.pca, 
+                # Individuals
+                geom.ind = "point",
+                #geom.var = c("point", "text"),
+                fill.ind = mult1$species, #col.ind = "black",
+                pointshape = 21, 
+                pointsize = "contrib",
+                mean.point = FALSE, #remove group mean point
+                #palette = "jco",
+                #palette = c("#00AFBB", "#E7B800", "#FC4E07"),
+                addEllipses = TRUE, #ellipse.type = "confidence",
+                # Variables
+                #alpha.var ="contrib", 
+                #col.var = "contrib",
+                gradient.cols = "RdYlBu",
+                invisible = "var",
+                legend.title = list(fill = "Species", color = "Species", size = "Contrib")
+                )+
+  labs(title = "")+ 
+  xlim(c(-5.2, 5.25))+
+  ylim(c(-5.2, 5.2))+ #scale_fill_brewer(palette="Dark2") +
+  ggsave("figs/biplot1.png", width=6, height=4.8, dpi=300)
+
+```
+
+### Componentes principais
+
+```{r}
+
+#attach (dat4)
+
+# Matriz R
+r = cor (dcomp [, 4:11])
+r
+
+cpr = princomp (dcomp [, 4:11], cor = T)
+summary(cpr, loading = T)
+
+
+# Extraindo os autovetores dos componentes principais 1 à 4
+autovetores=cpr$loadings[,1:8]
+autovetores
+
+
+# Extraindo os desvios-padrão dos componentes principais = Autovalores
+
+sdev=data.frame((cpr$sdev)^2)
+sdev
+
+
+# Grau de explicação dos k CP
+grau1=sdev[1,1]/sum(sdev)*100
+grau1
+grau2=sdev[2,1]/sum(sdev)*100
+grau2
+grau3=sdev[3,1]/sum(sdev)*100
+grau3
+
+
+grau_expli=sum(grau1, grau2,grau3)
+grau_expli 
+
+
+# Obtendo os scores dos componentes principais
+cp1r = cpr$scores [, 1]
+cp2r = cpr$scores [, 2]
+
+
+cp_data <- bind_cols(dcomp,cp1r)
+plot (cp1r, cp2r)
+text (cp1r, cp2r, dcomp$isolate)
+
+
+
+
+rycp1r = cor (dcomp [, 4:11], cp1r)
+rycp2r = cor (dcomp [, 4:11], cp2r)
+
+
+# Data.frame com os scores gerais dos componentes principais
+Cor_YCP<-data.frame(rycp1r,rycp2r)
+Cor_YCP
+
+
+
+det(r)
+x2=-(87-1-((2*10+5)/6))*(log(det(r)))
+x2
+
+qchisq(0.95, df=45) # ((10^2-10)/2)
+head(dat4)
+```
+
+### CP plot
+
+
+
+```{r}
+library(ggrepel)
+
+dcomp2 <- cbind(dcomp, cp1r, cp2r)
+
+dcomp2 %>% 
+  #filter(hybrid == "supremo") %>% 
+  #group_by(species, strain, rep) %>% 
+  #summarise(mean_cm = mean(cm, na.rm = T)) %>% 
+  ggplot(aes(cp1r, cp2r))+
+  #geom_point()
+  #geom_boxplot(size = 0.2, outlier.shape = NA) + 
+  geom_point( size = 3, alpha=0.7
+              , aes(shape = perit_group, color = species)
+              )+
+  geom_vline(xintercept = 0)+
+  geom_hline(yintercept = 0)+
+  #coord_flip()+
+ # scale_colour_discrete(breaks=c("maize", "wheat"),
+  #  labels = c("milho", "trigo"))+
+  #facet_grid (~ specie, scales = "free") +
+  #scale_fill_grey(start = 0.8, end = 0.5)+
+  theme_minimal()+ 
+  ylim(-4,4)+xlim(-4,4)+
+  theme(legend.position = "top"
+        #,plot.title = element_text(face="bold")
+        )+
+  geom_label_repel(aes(label = strain, size=2),
+                  box.padding   = 0.35, 
+                  point.padding = 0.5,
+                  segment.color = 'grey50')+
+ labs(y = "First PC 22.93% of variance",
+      x = "Second PC 20.64% of variance", 
+      #title = "SUPREMO",
+      color = "", shape = "Perit.")+  
+  ggsave("figs/princ_components.png", width=5, height=5.5)
+
+
+```
+
+###cluster analysis
+
+
+```{r}
+# obtem os valores medios
+
+z1 = (dcomp$spore_conc_105 - mean (dcomp$spore_conc_105)) / sd (dcomp$spore_conc_105)
+z2 = (dcomp$mean_cm - mean (dcomp$mean_cm)) / sd (dcomp$mean_cm)
+z3 = (dcomp$stalk_kws - mean (dcomp$stalk_kws)) / sd (dcomp$stalk_kws)
+z4 = (dcomp$stalk_sup  - mean (dcomp$stalk_sup )) / sd (dcomp$stalk_sup)
+z5 = (dcomp$ear_kws - mean (dcomp$ear_kws)) / sd (dcomp$ear_kws)
+z6 = (dcomp$ear_sup - mean (dcomp$ear_sup)) / sd (dcomp$ear_sup)
+z7 = (dcomp$ear_MG580PW - mean (dcomp$ear_MG580PW)) / sd (dcomp$ear_MG580PW)
+z8 = (dcomp$ear_BM820 - mean (dcomp$ear_BM820)) / sd (dcomp$ear_BM820)
+
+dageap = cbind (dcomp, z1, z2, z3, z4, z5, z6, z7, z8)
+
+
+
+dep = dist (dageap [, 14:21], method = "euclidean")
+agr1 = hclust (dep, method = "single")
+
+
+plot (agr1, hang = -1, labels = dcomp$strain, xlab = "", ylab = "Distance")
+agr1$height
+mcof = cophenetic (agr1)
+mcof
+cor (dep, mcof)
+mojena = mean (agr1$height) + 1.25 * sd (agr1$height)
+mojena
+k = length (agr1$height [agr1$height > mojena]) + 1
+abline (h = mojena)
+k
+rect.hclust (agr1, k = 5)
+grupo = cutree (agr1, k = 5)
+dageapg = cbind (dcomp, grupo)
+dageapg
+#tapply (dcomp$media_antag, grupo, mean)
+#tapply (dat_media$media_volat, grupo, mean)
+
+
+dados_final <- bind_cols(cp_data,dageapg) 
+dados_final1 <- dados_final %>% arrange(cp1r)
+
+
+write.csv(dados_final1, "tabela_antagonismo.csv")
+```
+
+
+## Wheather data
+
+```{r}
+wheather <- read_excel("wheather-data.xlsx", 2) %>% 
+  mutate(Data = as.Date(Data, format= "%Y-%m-%d")) %>% 
+  filter(Data >= "2017-10-25" & Data <= "2018-03-15") 
+
+wheather_2017<- read_excel("wheather-data.xlsx", 1) %>% 
+  mutate(year = "2017", 
+         Data = as.Date(Data, format= "%Y-%m-%d")) %>% 
+  filter(Data >= "2017-04-03" & Data <= "2017-09-25")
+
+plot_2018 <- wheather %>% 
+  ggplot(aes(x=as.Date(Data))) + 
+  geom_line(aes(y = `MinTemp [oC]`*5), color="steelblue", alpha = 0.7) + 
+  geom_line(aes(y = `MaxTemp [oC]`*5),  color = "darkred"#, linetype="twodash", linetype='dashed'
+            ) +
+  #geom_vline(xintercept = as.numeric(as.Date("2017-10-25")), linetype=4) +
+  #annotate("text", x = as.numeric(as.Date("2017-10-25")), y = 30, label = "**") +
+  geom_bar(aes(y = `Chuva Ac[mm]`), stat = "identity", fill = "grey80") +
+  scale_y_continuous(sec.axis = sec_axis(~./5, name = "Temperature (\u00B0C)"),expand=c(0,2))+
+  scale_x_date(breaks = "1 month",  labels=date_format("%b/%d"))+
+  theme_bw()+
+  theme(text = element_text(size = 14), 
+       strip.text.x = element_text(size = 14, face = "bold"), 
+        )+
+  labs(x = "",
+       y = "Rainfall (mm)",
+       title = "")
+  
+
+plot_2017 <- wheather_2017 %>% ggplot(aes(x=as.Date(Data))) + 
+  geom_line(aes(y = `MinTemp [oC]`*5), color="steelblue", alpha = 0.7) + 
+  geom_line(aes(y = `MaxTemp [oC]`*5),  color = "darkred"#, linetype="twodash"
+            ) +
+  geom_bar(aes(y = `Chuva Ac[mm]`), stat = "identity", fill = "grey80") +
+  scale_y_continuous(sec.axis = sec_axis(~./5, name = "Temperature (\u00B0C)"), expand=c(0,2))+
+  scale_x_date(breaks = "1 month",  labels=date_format("%b/%d"))+
+  theme_bw()+
+  theme(text = element_text(size = 14), 
+        strip.text.x = element_text(size = 14, face = "bold"), 
+        )+
+  labs(x = "",
+       y = "Rainfall (mm)",
+       title = "") 
+
+combo <- plot_grid(plot_2017, plot_2018, labels=c('2017 season', '2018 season'), align = "hv", ncol=1, rel_heights =  c(1, 1))
+ggsave("figs/fig1_wheather.png", combo, width=10, height=4.8, dpi=300)
+
+
+```
